@@ -45,6 +45,19 @@ if login():
             st.session_state.form_count = 0
 
         st.title("💰 Controle Financeiro Pessoal")
+        st.divider()
+
+        # 2. Botão de Atualização no Topo
+        col1, col2 = st.columns([1, 3]) # Colunas para o botão não ocupar a largura toda
+        with col1:
+            if st.button("🔄 Atualizar Dados"):
+                with st.spinner("Buscando dados no Google Sheets..."):
+                    # Limpa o cache das funções que buscam dados
+                    st.cache_data.clear()
+                    # Força o recarregamento imediato
+                    st.rerun()
+
+        st.divider()
 
         # Conectando à planilha
         conn = st.connection("gsheets", type=GSheetsConnection)

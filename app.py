@@ -197,31 +197,41 @@ if login():
                 st.plotly_chart(fig_cat, use_container_width=True)
 
                 # --- COMPARATIVO MENSAL CORRIGIDO ---
+                import plotly.graph_objects as go
+                import numpy as np
+
+                # --- 1. PREPARAÇÃO DOS DADOS (IGUAL AO ANTERIOR) ---
                 df_yoy = df_historico.copy()
                 df_yoy = df_yoy.sort_values("Data")
                 df_yoy["Mes/Ano"] = df_yoy["Data"].dt.strftime("%m/%Y")
 
-                # 1. Agrupar por Mes/Ano e Tipo, pegando o valor absoluto
                 df_agrupado = df_yoy.groupby(["Mes/Ano", "Tipo"])["Valor"].sum().abs().reset_index()
-
-                # 2. Lógica do Saldo Acumulado (usando o valor real com sinal)
                 df_saldo_mensal = df_yoy.groupby("Mes/Ano")["Valor"].sum().reset_index()
-                # IMPORTANTE: Garantir que o saldo siga a mesma ordem cronológica das datas
                 df_saldo_mensal["Saldo Acumulado"] = df_saldo_mensal["Valor"].cumsum()
 
-                # 3. Gerar o gráfico usando o df_agrupado DIRETAMENTE (sem pivot)
+                # --- 2. LÓGICA PARA IGUALAR O ZERO ---
+                # Pegamos os limites dos dados
+                mensal_max = df_agrupado["Valor"].max() * 1.1 # +10% de margem
+                acumulado_min = df_saldo_mensal["Saldo Acumulado"].min()
+                acumulado_max = df_saldo_mensal["Saldo Acumulado"].max()
+
+                # Se o saldo acumulado tiver valores negativos, precisamos ajustar o eixo das barras
+                # para que o zero "suba" e fique na mesma linha.
+                if acumulado_min < 0:
+                    # Calcula a proporção necessária para alinhar o zero
+                    proporcao_negativa = abs(acumulado_min) / (acumulado_max - acumulado_min)
+                    mensal_min = -(mensal_max * proporcao_negativa) / (1 - proporcao_negativa)
+                else:
+                    mensal_min = 0
+                    acumulado_min = 0 # Garante que o zero comece no fundo se não houver dívida
+
+                # --- 3. CRIAR O GRÁFICO ---
                 fig_comp = px.bar(
-                    df_agrupado, 
-                    x="Mes/Ano", 
-                    y="Valor", 
-                    color="Tipo", # Isso separa Receita e Despesa automaticamente
-                    barmode="group", 
-                    text_auto='.2f',
-                    title="Planejamento Mensal: Receita vs Despesa + Saldo Acumulado",
+                    df_agrupado, x="Mes/Ano", y="Valor", color="Tipo",
+                    barmode="group", text_auto='.2f',
                     color_discrete_map={"Receita": "#2ecc71", "Despesa": "#e74c3c"}
                 )
 
-                # 4. Adicionar a LINHA do Acumulado
                 fig_comp.add_trace(
                     go.Scatter(
                         x=df_saldo_mensal["Mes/Ano"], 
@@ -231,21 +241,28 @@ if login():
                         text=df_saldo_mensal["Saldo Acumulado"].apply(lambda x: f'R${x:,.0f}'),
                         textposition="top center",
                         line=dict(color="#3498db", width=4),
-                        yaxis="y2" 
+                        yaxis="y2"
                     )
                 )
 
-                # 5. Ajustar o layout para Eixo Duplo
+                # --- 4. APLICAR OS RANGES CALCULADOS ---
                 fig_comp.update_layout(
-                    yaxis=dict(title="Mensal (R$)"),
+                    title="Análise Mensal com Zeros Alinhados",
+                    yaxis=dict(
+                        title="Mensal (R$)", 
+                        range=[mensal_min, mensal_max], # Eixo Esquerdo
+                        zeroline=True, zerolinewidth=2, zerolinecolor='black'
+                    ),
                     yaxis2=dict(
-                        title="Acumulado (R$)",
-                        overlaying="y",
+                        title="Acumulado (R$)", 
+                        range=[acumulado_min * 1.1, acumulado_max * 1.1], # Eixo Direito
+                        overlaying="y", 
                         side="right",
+                        zeroline=True, zerolinewidth=2, zerolinecolor='black',
                         showgrid=False
                     ),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    xaxis=dict(type='category'), # Mantém a ordem correta dos meses
+                    xaxis=dict(type='category'),
                     hovermode="x unified"
                 )
 

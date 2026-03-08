@@ -1,21 +1,35 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.express as px
+import extra_streamlit_components as stx
+import plotly.graph_objects as go
+
+# Inicializa o gerenciador de cookies
+def get_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_manager()
 
 def login():
-    # Se a senha já foi validada antes, não pede de novo
-    if st.session_state.get("autenticado"):
+    # 1. Verifica se já existe um cookie de login
+    cookie_auth = cookie_manager.get(cookie="autenticado")
+    
+    if cookie_auth == "True" or st.session_state.get("autenticado"):
         return True
 
     st.title("🔒 Acesso Restrito")
-    senha_digitada = st.text_input("Digite a senha para acessar o painel:", type="password")
+    senha_digitada = st.text_input("Digite a senha:", type="password")
     
-    # BUSCANDO A SENHA DO COFRE (SECRETS), NÃO DO CÓDIGO
     if st.button("Entrar"):
         if senha_digitada == st.secrets["password"]:
             st.session_state["autenticado"] = True
+            
+            # 2. Salva o cookie no navegador por 1 dia (86400 segundos)
+            cookie_manager.set("autenticado", "True", expires_at=datetime.now() + timedelta(days=1))
+            
+            st.success("Login realizado!")
             st.rerun()
         else:
             st.error("Senha incorreta!")
@@ -81,22 +95,23 @@ if login():
             totalcaixinha = abs(caixinha) - resgatecaixinha
 
             saldo_total = df_pago["Valor"].sum()
+            saldoatual = df_historico[df_historico["Pago"] == "Sim"]["Valor"].sum()
             total_pago_mes = df_pago_mes[df_pago_mes["Valor"] < 0]["Valor"].sum()
             receita_mes = df_pago_mes[df_pago_mes["Valor"] > 0]["Valor"].sum()
             
-            faltapagar = df_historico[(df_historico["Pago"] == "Não") & (df_historico["Valor"] < 0)]["Valor"].sum()
-            areceber = df_historico[(df_historico["Pago"] == "Não") & (df_historico["Valor"] > 0)]["Valor"].sum()
+            faltapagar = df_mes_atual[(df_mes_atual["Pago"] == "Não") & (df_mes_atual["Valor"] < 0)]["Valor"].sum()
+            areceber = df_mes_atual[(df_mes_atual["Pago"] == "Não") & (df_mes_atual["Valor"] > 0)]["Valor"].sum()
             saldofuturo = saldo_total + faltapagar + areceber
 
             # --- EXIBIÇÃO DE MÉTRICAS ---
-            m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-            m1.metric("Saldo Atual", f"R$ {saldo_total:,.2f}")
-            m2.metric("Falta Pagar", f"R$ {abs(faltapagar):,.2f}", delta_color="inverse")
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            m1.metric("Saldo Atual", f"R$ {saldoatual:,.2f}")
+            m2.metric("Falta Pagar Mês Atual", f"R$ {abs(faltapagar):,.2f}", delta_color="inverse")
             m3.metric("Pago (Mês)", f"R$ {abs(total_pago_mes):,.2f}")
             m4.metric("Cartão de Crédito", f"R$ {valor_cartao:,.2f}")
-            m5.metric("Saldo Futuro", f"R$ {saldofuturo:,.2f}")
-            m6.metric("Investido", f"R$ {totalinvestido:,.2f}")
-            m7.metric("Caixinha", f"R$ {totalcaixinha:,.2f}")
+            #m5.metric("Saldo Futuro", f"R$ {saldofuturo:,.2f}")
+            m5.metric("Investido", f"R$ {totalinvestido:,.2f}")
+            m6.metric("Caixinha", f"R$ {totalcaixinha:,.2f}")
 
             st.divider()
 
@@ -181,41 +196,57 @@ if login():
                 )
                 st.plotly_chart(fig_cat, use_container_width=True)
 
-
-
-                # Comparativo Mensal
+                # --- COMPARATIVO MENSAL CORRIGIDO ---
                 df_yoy = df_historico.copy()
-
-                # 1. Ordenar por data antes de converter para string (garante ordem cronológica no gráfico)
                 df_yoy = df_yoy.sort_values("Data")
-                df_yoy["Mes/Ano"] = df_yoy["Data"].dt.to_period("M").astype(str)
+                df_yoy["Mes/Ano"] = df_yoy["Data"].dt.strftime("%m/%Y")
 
-                # 2. Agrupar e pivotar
-                pivot_yoy = df_yoy.groupby(["Mes/Ano", "Tipo"])["Valor"].sum().abs().unstack().fillna(0).reset_index()
+                # 1. Agrupar por Mes/Ano e Tipo, pegando o valor absoluto
+                df_agrupado = df_yoy.groupby(["Mes/Ano", "Tipo"])["Valor"].sum().abs().reset_index()
 
-                # 3. Gerar o gráfico com text_auto ativado
+                # 2. Lógica do Saldo Acumulado (usando o valor real com sinal)
+                df_saldo_mensal = df_yoy.groupby("Mes/Ano")["Valor"].sum().reset_index()
+                # IMPORTANTE: Garantir que o saldo siga a mesma ordem cronológica das datas
+                df_saldo_mensal["Saldo Acumulado"] = df_saldo_mensal["Valor"].cumsum()
+
+                # 3. Gerar o gráfico usando o df_agrupado DIRETAMENTE (sem pivot)
                 fig_comp = px.bar(
-                    pivot_yoy, 
+                    df_agrupado, 
                     x="Mes/Ano", 
-                    y=["Receita", "Despesa"], 
+                    y="Valor", 
+                    color="Tipo", # Isso separa Receita e Despesa automaticamente
                     barmode="group", 
-                    text_auto='.2f',  # <--- ESSENCIAL para mostrar os números
-                    title="Planejamento Mensal: Receita vs Despesa",
+                    text_auto='.2f',
+                    title="Planejamento Mensal: Receita vs Despesa + Saldo Acumulado",
                     color_discrete_map={"Receita": "#2ecc71", "Despesa": "#e74c3c"}
                 )
 
-                # 4. Ajustar estilo dos rótulos
-                fig_comp.update_traces(
-                    textfont_size=12,      
-                    textangle=0,           # Mantém o texto na horizontal
-                    textposition="outside", 
-                    cliponaxis=False
+                # 4. Adicionar a LINHA do Acumulado
+                fig_comp.add_trace(
+                    go.Scatter(
+                        x=df_saldo_mensal["Mes/Ano"], 
+                        y=df_saldo_mensal["Saldo Acumulado"],
+                        name="Saldo Acumulado",
+                        mode='lines+markers+text',
+                        text=df_saldo_mensal["Saldo Acumulado"].apply(lambda x: f'R${x:,.0f}'),
+                        textposition="top center",
+                        line=dict(color="#3498db", width=4),
+                        yaxis="y2" 
+                    )
                 )
 
+                # 5. Ajustar o layout para Eixo Duplo
                 fig_comp.update_layout(
-                    yaxis_title="Valor (R$)",
-                    xaxis_title="Mês",
-                    legend_title="Tipo"
+                    yaxis=dict(title="Mensal (R$)"),
+                    yaxis2=dict(
+                        title="Acumulado (R$)",
+                        overlaying="y",
+                        side="right",
+                        showgrid=False
+                    ),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    xaxis=dict(type='category'), # Mantém a ordem correta dos meses
+                    hovermode="x unified"
                 )
 
                 st.plotly_chart(fig_comp, use_container_width=True)
@@ -238,6 +269,7 @@ if login():
                     obs_reg = st.text_area("Observação")
                     
                     if st.form_submit_button("🚀 Registrar"):
+                        existing_data = conn.read(ttl=0)
                         if desc_reg and valor_reg > 0:
                             # Lógica de sinal
                             valor_final = valor_reg if cat_reg in ['Salário', 'Resgate Investimento', 'Resgate Caixinha'] else -valor_reg
@@ -254,7 +286,10 @@ if login():
                                 "Forma de Pagamento": forma_reg
                             }])
                             
-                            updated_df = pd.concat([df_historico, new_row], ignore_index=True)
+                            updated_df = pd.concat([existing_data, new_row], ignore_index=True)
+                            # --- O TRUQUE PARA NÃO MUDAR O FORMATO ---
+                            # Forçamos a coluna Data a ser string ANTES de enviar para o Sheets
+                            updated_df["Data"] = updated_df["Data"].astype(str)
                             conn.update(data=updated_df)
                             st.cache_data.clear()
                             st.session_state.form_count += 1
